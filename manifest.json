@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "id": "chase.kanban",
+  "name": "Kanban",
+  "version": "1.0.0",
+  "author": "Chase Fournier",
+  "description": "A kanban board for tasks: columns, cards, details, links, and images.",
+  "kinds": [
+    "overlay",
+    "bar-widget"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "overlay": "Board.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Kanban",
+    "description": "Opens the kanban board and shows how many tasks are open",
+    "category": "Productivity",
+    "defaultSection": "right",
+    "allowMultiple": false,
+    "defaults": {
+      "icon": "",
+      "showCount": true,
+      "countColumn": ""
+    },
+    "schema": [
+      { "key": "icon", "type": "string", "label": "Icon glyph" },
+      { "key": "showCount", "type": "bool", "label": "Show open task count" },
+      { "key": "countColumn", "type": "string", "label": "Count only this column (name, blank = all unfinished)" }
+    ]
+  }
+}
