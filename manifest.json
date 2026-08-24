@@ -4,6 +4,8 @@
   "name": "Kanban",
   "version": "1.0.0",
   "author": "Chase Fournier",
+  "license": "MIT",
+  "homepage": "https://github.com/Chase-Fournier/chase.kanban",
   "description": "A kanban board for tasks: columns, cards, details, links, and images.",
   "kinds": [
     "overlay",
@@ -26,9 +28,21 @@
       "countColumn": ""
     },
     "schema": [
-      { "key": "icon", "type": "string", "label": "Icon glyph" },
-      { "key": "showCount", "type": "bool", "label": "Show open task count" },
-      { "key": "countColumn", "type": "string", "label": "Count only this column (name, blank = all unfinished)" }
+      {
+        "key": "icon",
+        "type": "string",
+        "label": "Icon glyph"
+      },
+      {
+        "key": "showCount",
+        "type": "bool",
+        "label": "Show open task count"
+      },
+      {
+        "key": "countColumn",
+        "type": "string",
+        "label": "Count only this column (name, blank = all unfinished)"
+      }
     ]
   }
 }

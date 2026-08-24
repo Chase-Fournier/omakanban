@@ -7,17 +7,56 @@ image attachments.
 
 ## Install
 
-The plugin lives in `~/.config/omarchy/plugins/chase.kanban/`. If you are
-setting it up on another machine:
+```bash
+omarchy plugin add https://github.com/Chase-Fournier/chase.kanban.git --enable
+```
+
+That clones into `~/.config/omarchy/plugins/chase.kanban/`, checks the manifest
+against the schema the shell enforces, and asks which bar section to put the
+widget in. `omarchy plugin enable` is what marks the plugin enabled — the board
+overlay loads along with the widget.
+
+Already have the folder in place? Register it without re-cloning:
 
 ```bash
-git clone <this repo> ~/.config/omarchy/plugins/chase.kanban
+omarchy plugin validate ~/.config/omarchy/plugins/chase.kanban
 omarchy-shell shell rescanPlugins
 omarchy plugin enable chase.kanban --section right
 ```
 
-`omarchy plugin enable` puts the widget in the bar, which is also what marks
-the plugin enabled — the board overlay loads with it.
+Update later with `omarchy plugin update chase.kanban`.
+
+### Requirements
+
+Omarchy with `omarchy-shell`. Everything the board needs at its core ships with
+Omarchy; two conveniences lean on packages you may not have:
+
+| Feature | Needs | If missing |
+|---|---|---|
+| Opening links, revealing the data folder | `xdg-utils` | Nothing opens |
+| Paste an image from the clipboard | `wl-clipboard` (Omarchy base) | The board says it could not read the clipboard |
+| **Browse…** file picker for images | `zenity` (`sudo pacman -S zenity`) | The board says zenity is not installed; paste a path or use the clipboard instead |
+
+## Remove
+
+```bash
+omarchy plugin remove chase.kanban
+```
+
+That takes the widget out of `~/.config/omarchy/shell.json` and deletes the
+plugin folder — the git repo upstream is untouched, and the command asks before
+it does either.
+
+**Your tasks are not deleted.** The board file lives outside the plugin folder,
+so removing and reinstalling picks up exactly where you left off. To throw the
+data away too:
+
+```bash
+rm -rf ~/.local/share/omarchy/kanban
+```
+
+Nothing else on the system is touched: the plugin writes only inside that one
+folder, and installs no services, hooks, or files anywhere else.
 
 ## Using the board
 
@@ -60,7 +99,7 @@ Title, column, priority, due date, tags, free-text details, links, and images.
   which opens a month grid with Today and Clear.
 - **Images** can be added three ways: paste a path, paste the clipboard
   (`wl-paste`, saved into `images/` next to the board file), or pick a file
-  with `zenity`. Clicking a thumbnail previews it in place rather than
+  with `zenity` if it is installed. Clicking a thumbnail previews it in place rather than
   launching an external viewer.
 - Edits save automatically. Text fields write back when you leave them; the
   details box saves shortly after you stop typing.
@@ -120,6 +159,9 @@ It is plain JSON and safe to edit by hand or keep in git — the board re-reads
 it every time it opens. If the file will not parse, the board opens empty and
 refuses to save over it, so a typo is recoverable.
 
+Nothing under `~/.local/share/omarchy/kanban/` is removed when the plugin is
+uninstalled; see [Remove](#remove).
+
 ## Scripting
 
 ```bash
@@ -164,3 +206,7 @@ Editing `Board.qml` hot-reloads. Editing the **other** QML files often does
 not: the engine caches those types by URL, and a plugin rescan does not
 invalidate them. Run `omarchy restart shell` after touching them, otherwise you
 will be looking at the previous version and wondering why nothing changed.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

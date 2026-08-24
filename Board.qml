@@ -369,7 +369,10 @@ Item {
     root.pendingAttach = taskId
     root.externalDialogOpen = true
     fileDialogProc.command = ["bash", "-c",
-      "zenity --file-selection --title='Attach an image' "
+      // zenity is not part of a base Omarchy install. Say so instead of
+      // opening nothing and leaving the button looking broken.
+      "command -v zenity >/dev/null 2>&1 || { echo 'ERR:zenity is not installed \u2014 paste a path or use the clipboard instead'; exit 0; }; "
+      + "zenity --file-selection --title='Attach an image' "
       + "--file-filter='Images | *.png *.jpg *.jpeg *.gif *.webp *.bmp *.svg *.avif' "
       + "--file-filter='All files | *' 2>/dev/null || true"]
     fileDialogProc.running = true
@@ -479,7 +482,11 @@ Item {
     id: fileDialogProc
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.finishAttach(text)
+      onStreamFinished: {
+        var line = String(text || "").trim()
+        if (line.indexOf("ERR:") === 0) { root.pendingAttach = null; root.notify(line.slice(4)) }
+        else root.finishAttach(line)
+      }
     }
     onExited: {
       root.externalDialogOpen = false
