@@ -165,9 +165,12 @@ uninstalled; see [Remove](#remove).
 ### What the board refuses to read
 
 The shell is long-lived, so the board treats its own data folder as untrusted
-input rather than as something it wrote. Before reading `board.json` it checks
-the descriptor it is about to read from — not just the path — and refuses if it
-is a symlink, is not a regular file, is not owned by you, or is over **8 MiB**.
+input rather than as something it wrote. `board.json` is opened with
+`O_NOFOLLOW`, so the kernel refuses the open if the name is a symlink — there
+is no moment between checking the name and opening it for the name to change
+under the board. Everything after that is decided from the descriptor rather
+than the path, and the read is refused if what was opened is not a regular
+file, is not owned by you, or is over **8 MiB**.
 A refusal shows in the board header and holds every save, exactly like a parse
 error does, so the file on disk is never overwritten by a board that could not
 read it.

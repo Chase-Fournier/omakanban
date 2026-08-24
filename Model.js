@@ -29,32 +29,56 @@ var MAX_IMAGE_BYTES = 32 * 1024 * 1024
 // forever); nothing here is worth hanging a bar widget over.
 var IO_TIMEOUT_SECONDS = 5
 
-// Reads board.json only if the descriptor we end up holding is a regular file
-// we own and within the size cap.
+// Reads board.json only if the descriptor we opened is a regular file we own
+// and within the size cap.
 //
-// The checks run twice on purpose. The lstat pass up front rejects a symlink or
-// a FIFO before we ever open it, because open() on a FIFO blocks. The second
-// pass re-runs them against /proc/self/fd, which resolves to the inode the
-// descriptor actually refers to rather than re-walking the path — so a file
-// swapped underneath us between the test and the open is caught before a single
-// byte is read, instead of being trusted on the strength of a stale lstat.
+// The open itself is the check that matters, so it is done with O_NOFOLLOW:
+// the kernel refuses the open outright if the final component is a symlink,
+// which leaves no window between testing the path and opening it. A test on
+// the pathname could not do that — a path swapped to a symlink pointing at
+// another file of ours after the test would be followed, and would pass every
+// later check, because by then the descriptor really is a regular file we own.
+// O_NONBLOCK covers the other way a pathname can misbehave: opening a FIFO
+// left in place blocks until a writer shows up, and nothing here is worth
+// hanging a bar widget over.
+//
+// Everything after the open reads that one descriptor and never the path
+// again: fstat decides type, owner, and size, and the bytes come from the same
+// descriptor those answers describe. perl is what gives us the open flags —
+// the shell has no way to ask for them — and is a hard dependency of omarchy.
 function readBoardCommand(path) {
   var script =
-    'set -uo pipefail; ' +
-    'path=$1; max=$2; ' +
-    'if [ -L "$path" ]; then printf "ERR:board.json is a symlink; refusing to read it\\n"; exit 0; fi; ' +
-    'if [ ! -e "$path" ]; then printf "NEW:\\n"; exit 0; fi; ' +
-    'if [ ! -f "$path" ]; then printf "ERR:board.json is not a regular file; refusing to read it\\n"; exit 0; fi; ' +
-    'exec 3< "$path" || { printf "ERR:board.json could not be opened\\n"; exit 0; }; ' +
-    'info=$(stat -L -c "%F|%u|%s" /proc/self/fd/3) || { printf "ERR:board.json could not be inspected\\n"; exit 0; }; ' +
-    'kind=${info%%|*}; rest=${info#*|}; owner=${rest%%|*}; size=${rest#*|}; ' +
-    'if [ "$kind" != "regular file" ]; then printf "ERR:board.json is not a regular file; refusing to read it\\n"; exit 0; fi; ' +
-    'if [ "$owner" != "$(id -u)" ]; then printf "ERR:board.json is not owned by you; refusing to read it\\n"; exit 0; fi; ' +
-    'if [ "$size" -gt "$max" ]; then printf "ERR:board.json is bigger than the %s MiB limit; refusing to read it\\n" "$((max / 1048576))"; exit 0; fi; ' +
-    'printf "OK:\\n"; ' +
-    'head -c "$max" <&3'
-  return ["timeout", String(IO_TIMEOUT_SECONDS), "bash", "-c", script,
-          "bash", String(path), String(MAX_BOARD_BYTES)]
+    'use strict; use warnings; ' +
+    'use Errno qw(ENOENT ELOOP); ' +
+    'use Fcntl qw(O_RDONLY O_NOFOLLOW O_NONBLOCK F_SETFL S_ISREG); ' +
+    'my ($path, $max) = @ARGV; ' +
+    'sub bail { print "ERR:board.json ", $_[0], "\\n"; exit 0 } ' +
+    'my $fh; ' +
+    'unless (sysopen($fh, $path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)) { ' +
+    '  if ($! == ENOENT) { print "NEW:\\n"; exit 0 } ' +
+    '  bail("is a symlink; refusing to read it") if $! == ELOOP; ' +
+    '  bail("could not be opened"); ' +
+    '} ' +
+    'my @st = stat($fh) or bail("could not be inspected"); ' +
+    'bail("is not a regular file; refusing to read it") unless S_ISREG($st[2]); ' +
+    'bail("is not owned by you; refusing to read it") unless $st[4] == $<; ' +
+    'bail(sprintf("is bigger than the %d MiB limit; refusing to read it", $max / 1048576)) if $st[7] > $max; ' +
+    // O_NONBLOCK has done its job once the descriptor is known to be a regular
+    // file; clearing it keeps a short read from ever looking like EOF.
+    'fcntl($fh, F_SETFL, 0); ' +
+    'binmode $fh; binmode STDOUT; ' +
+    'print "OK:\\n"; ' +
+    // Capped again on the way out rather than trusted to the size fstat saw,
+    // so a file growing under us still cannot hand us more than the limit.
+    'my $left = $max; ' +
+    'while ($left > 0) { ' +
+    '  my $n = sysread($fh, my $chunk, $left < 65536 ? $left : 65536); ' +
+    '  last unless $n; ' +
+    '  print $chunk; ' +
+    '  $left -= $n; ' +
+    '}'
+  return ["timeout", String(IO_TIMEOUT_SECONDS), "perl", "-e", script,
+          "--", String(path), String(MAX_BOARD_BYTES)]
 }
 
 // Splits what readBoardCommand printed into a status line and the payload that

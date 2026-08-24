@@ -449,7 +449,8 @@ Item {
 
   // Reads go through this rather than through FileView, which would open
   // whatever happens to be sitting at the path. See Model.readBoardCommand:
-  // the descriptor is checked before a byte of it is read.
+  // the open refuses a symlink outright, and the descriptor it returns is
+  // checked before a byte of it is read.
   Process {
     id: boardReadProc
     stdout: StdioCollector {
