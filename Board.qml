@@ -31,6 +31,7 @@ Item {
   property var board: Model.defaultBoard()
   property bool loaded: false
   property bool loadError: false
+  property string loadErrorMessage: ""
   property string filterText: ""
 
   // Task detail / settings / column editor are modal over the board.
@@ -131,7 +132,7 @@ Item {
     root.filterText = ""
     root.settingsOpen = false
     root.editingColumnId = ""
-    boardFile.reload()
+    root.reloadBoard()
 
     if (payload.newTask === true || payload.add === true) Qt.callLater(function() { root.createTask("") })
     else if (payload.task) Qt.callLater(function() { root.openTaskId = String(payload.task) })
@@ -157,15 +158,31 @@ Item {
 
   // ------------------------------------------------------------- persistence
 
-  function loadBoard(raw) {
-    var parsed = Model.parse(raw)
-    if (parsed === null) {
-      // Unreadable JSON: show an empty board but never write over the file,
-      // so a hand-edit with a typo in it stays recoverable.
+  function reloadBoard() {
+    boardReadProc.running = false
+    boardReadProc.command = Model.readBoardCommand(root.boardPath)
+    boardReadProc.running = true
+  }
+
+  function applyRead(text) {
+    var result = Model.parseReadResult(text)
+    // A refused read and an unparseable one end the same way: an empty board
+    // with every save held, so whatever is on disk survives to be fixed by
+    // hand. The message differs because the fix does.
+    if (result.status === "error") {
+      root.loadErrorMessage = result.message
       root.loadError = true
       root.loaded = true
       return
     }
+    var parsed = Model.parse(result.content)
+    if (parsed === null) {
+      root.loadErrorMessage = "board.json could not be parsed"
+      root.loadError = true
+      root.loaded = true
+      return
+    }
+    root.loadErrorMessage = ""
     root.loadError = false
     root.board = parsed
     root.loaded = true
@@ -351,17 +368,8 @@ Item {
 
   function attachClipboardImage(taskId) {
     root.pendingAttach = taskId
-    clipboardImageProc.command = ["bash", "-c",
-      "set -euo pipefail; "
-      + "mkdir -p \"$1\"; "
-      + "mime=$(wl-paste --list-types 2>/dev/null | grep -m1 '^image/' || true); "
-      + "[ -n \"$mime\" ] || { echo 'ERR:no image on the clipboard'; exit 0; }; "
-      + "ext=${mime#image/}; case \"$ext\" in jpeg) ext=jpg;; svg+xml) ext=svg;; esac; "
-      + "out=\"$1/paste-$(date +%Y%m%d-%H%M%S)-$RANDOM.$ext\"; "
-      + "wl-paste --type \"$mime\" > \"$out\"; "
-      + "[ -s \"$out\" ] || { rm -f \"$out\"; echo 'ERR:clipboard image was empty'; exit 0; }; "
-      + "echo \"OK:$out\"",
-      "bash", root.imagesDir]
+    clipboardImageProc.running = false
+    clipboardImageProc.command = Model.clipboardImageCommand(root.imagesDir)
     clipboardImageProc.running = true
   }
 
@@ -436,19 +444,31 @@ Item {
   Process {
     id: ensureDirsProc
     command: ["mkdir", "-p", root.imagesDir]
-    onExited: boardFile.reload()
+    onExited: root.reloadBoard()
   }
 
-  // Only this plugin writes the board, so there is no watch to fight with our
-  // own saves; open() re-reads instead, which also picks up hand edits.
+  // Reads go through this rather than through FileView, which would open
+  // whatever happens to be sitting at the path. See Model.readBoardCommand:
+  // the descriptor is checked before a byte of it is read.
+  Process {
+    id: boardReadProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyRead(text)
+    }
+  }
+
+  // Write-only. Only this plugin writes the board, so there is no watch to
+  // fight with our own saves; open() re-reads instead, which also picks up
+  // hand edits. atomicWrites makes a save a rename over the old file, so
+  // writing neither follows a symlink nor blocks on a FIFO left in its place.
   FileView {
     id: boardFile
     path: root.boardPath
     watchChanges: false
     atomicWrites: true
     printErrors: false
-    onLoaded: root.loadBoard(text())
-    onLoadFailed: root.loadBoard("")
+    preload: false
   }
 
   Timer {
@@ -628,7 +648,7 @@ Item {
 
             Text {
               text: root.loadError
-                ? "board.json could not be parsed — nothing will be saved"
+                ? (root.loadErrorMessage || "board.json could not be read") + " — nothing will be saved"
                 : Model.openCount(root.board) + " open · " + root.board.tasks.length + " total"
               color: root.loadError ? Color.urgent : root.muted
               font.family: root.fontFamily

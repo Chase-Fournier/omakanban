@@ -29,7 +29,10 @@ BarWidget {
   readonly property string countText: showCount && count > 0 ? String(count) : ""
 
   function refresh() {
-    boardFile.reload()
+    // A read already in flight is a read that is about to answer this one.
+    if (boardReadProc.running) return
+    boardReadProc.command = Model.readBoardCommand(root.boardPath)
+    boardReadProc.running = true
   }
 
   function openBoard(payload) {
@@ -55,18 +58,40 @@ BarWidget {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  FileView {
-    id: boardFile
-    path: root.boardPath
-    watchChanges: true
-    printErrors: false
-    onLoaded: {
-      var parsed = Model.parse(text())
-      if (parsed) root.board = parsed
-      root.loaded = true
+  // The widget reads through the same validated command the overlay uses
+  // rather than through FileView, which would open whatever is at the path —
+  // and this one runs unattended in a long-lived bar, so it is the more
+  // exposed of the two.
+  //
+  // That costs the file watch: FileView could tell us the board had changed,
+  // and nothing here can without opening it. A poll takes its place. The read
+  // is a single short-lived command over a small file, so the interval is
+  // about how fresh the count looks, not about load.
+  Process {
+    id: boardReadProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var result = Model.parseReadResult(text)
+        if (result.status !== "error") {
+          var parsed = Model.parse(result.content)
+          if (parsed) root.board = parsed
+        }
+        // A board we could not read leaves the last good count on the bar
+        // rather than flashing a zero; the overlay is where the reason for
+        // the refusal gets spelled out.
+        root.loaded = true
+      }
     }
-    onLoadFailed: root.loaded = true
-    onFileChanged: reload()
+  }
+
+  Component.onCompleted: root.refresh()
+
+  Timer {
+    interval: 5000
+    running: true
+    repeat: true
+    onTriggered: root.refresh()
   }
 
   IpcHandler {

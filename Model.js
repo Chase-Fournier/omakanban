@@ -14,6 +14,92 @@ var PRIORITIES = ["none", "low", "medium", "high", "urgent"]
 // heading. "" means "no accent, follow the theme".
 var SWATCHES = ["", "#6ea8fe", "#5ecfa0", "#e8c46a", "#e08a5a", "#d16a8a", "#a98adf", "#7ec8d8"]
 
+// ------------------------------------------------------------------ IO limits
+//
+// The shell is a long-lived process that outlives every board it opens, so
+// anything read off disk or off the clipboard needs a ceiling. Without one a
+// truncated download left at board.json, or a video frame sitting on the
+// clipboard, is enough to pin the shell's memory or fill the disk.
+
+var MAX_BOARD_BYTES = 8 * 1024 * 1024
+var MAX_IMAGE_BYTES = 32 * 1024 * 1024
+
+// How long any single read is allowed to take. Opening a path can block
+// indefinitely (a FIFO waits for a writer, a stalled network mount waits
+// forever); nothing here is worth hanging a bar widget over.
+var IO_TIMEOUT_SECONDS = 5
+
+// Reads board.json only if the descriptor we end up holding is a regular file
+// we own and within the size cap.
+//
+// The checks run twice on purpose. The lstat pass up front rejects a symlink or
+// a FIFO before we ever open it, because open() on a FIFO blocks. The second
+// pass re-runs them against /proc/self/fd, which resolves to the inode the
+// descriptor actually refers to rather than re-walking the path — so a file
+// swapped underneath us between the test and the open is caught before a single
+// byte is read, instead of being trusted on the strength of a stale lstat.
+function readBoardCommand(path) {
+  var script =
+    'set -uo pipefail; ' +
+    'path=$1; max=$2; ' +
+    'if [ -L "$path" ]; then printf "ERR:board.json is a symlink; refusing to read it\\n"; exit 0; fi; ' +
+    'if [ ! -e "$path" ]; then printf "NEW:\\n"; exit 0; fi; ' +
+    'if [ ! -f "$path" ]; then printf "ERR:board.json is not a regular file; refusing to read it\\n"; exit 0; fi; ' +
+    'exec 3< "$path" || { printf "ERR:board.json could not be opened\\n"; exit 0; }; ' +
+    'info=$(stat -L -c "%F|%u|%s" /proc/self/fd/3) || { printf "ERR:board.json could not be inspected\\n"; exit 0; }; ' +
+    'kind=${info%%|*}; rest=${info#*|}; owner=${rest%%|*}; size=${rest#*|}; ' +
+    'if [ "$kind" != "regular file" ]; then printf "ERR:board.json is not a regular file; refusing to read it\\n"; exit 0; fi; ' +
+    'if [ "$owner" != "$(id -u)" ]; then printf "ERR:board.json is not owned by you; refusing to read it\\n"; exit 0; fi; ' +
+    'if [ "$size" -gt "$max" ]; then printf "ERR:board.json is bigger than the %s MiB limit; refusing to read it\\n" "$((max / 1048576))"; exit 0; fi; ' +
+    'printf "OK:\\n"; ' +
+    'head -c "$max" <&3'
+  return ["timeout", String(IO_TIMEOUT_SECONDS), "bash", "-c", script,
+          "bash", String(path), String(MAX_BOARD_BYTES)]
+}
+
+// Splits what readBoardCommand printed into a status line and the payload that
+// follows it. An empty read means the command was killed by its timeout.
+function parseReadResult(text) {
+  var raw = String(text || "")
+  if (!raw) return { status: "error", content: "", message: "the board file could not be read in time" }
+  var nl = raw.indexOf("\n")
+  var head = nl === -1 ? raw : raw.slice(0, nl)
+  var body = nl === -1 ? "" : raw.slice(nl + 1)
+  if (head === "NEW:") return { status: "new", content: "", message: "" }
+  if (head === "OK:") return { status: "ok", content: body, message: "" }
+  if (head.indexOf("ERR:") === 0) return { status: "error", content: "", message: head.slice(4) }
+  return { status: "error", content: "", message: "the board file could not be read" }
+}
+
+// Saves whatever image is on the clipboard into imagesDir, capped. mktemp is
+// what makes the destination safe: it creates the file itself with O_EXCL and
+// an unguessable suffix, so the write cannot land on something pre-planted at a
+// name we could have predicted, and cannot follow a symlink out of the folder.
+function clipboardImageCommand(imagesDir) {
+  var script =
+    'set -uo pipefail; ' +
+    'dir=$1; max=$2; ' +
+    'if [ -L "$dir" ] || [ ! -d "$dir" ]; then printf "ERR:the images folder is missing or is not a folder\\n"; exit 0; fi; ' +
+    'command -v wl-paste >/dev/null 2>&1 || { printf "ERR:wl-clipboard is not installed\\n"; exit 0; }; ' +
+    'mime=$(wl-paste --list-types 2>/dev/null | grep -m1 "^image/" || true); ' +
+    '[ -n "$mime" ] || { printf "ERR:no image on the clipboard\\n"; exit 0; }; ' +
+    'ext=${mime#image/}; case "$ext" in jpeg) ext=jpg;; svg+xml) ext=svg;; esac; ' +
+    'case "$ext" in *[!A-Za-z0-9]*) ext=bin;; "") ext=bin;; esac; ' +
+    'out=$(mktemp "$dir/paste-$(date +%Y%m%d-%H%M%S)-XXXXXXXX.$ext") || ' +
+    '{ printf "ERR:could not create a file for the image\\n"; exit 0; }; ' +
+    // head closes the pipe at the cap, so wl-paste dies of SIGPIPE on anything
+    // oversized. That is the intended stop, not a failure worth reporting.
+    'wl-paste --type "$mime" 2>/dev/null | head -c "$((max + 1))" > "$out"; ' +
+    'written=$(stat -c %s "$out" 2>/dev/null || echo 0); ' +
+    'if [ "$written" -eq 0 ]; then rm -f "$out"; printf "ERR:the clipboard image was empty\\n"; exit 0; fi; ' +
+    // One byte over the cap is how we tell "exactly at the limit" from
+    // "truncated", which is why head was asked for max + 1.
+    'if [ "$written" -gt "$max" ]; then rm -f "$out"; printf "ERR:that image is bigger than the %s MiB limit\\n" "$((max / 1048576))"; exit 0; fi; ' +
+    'printf "OK:%s\\n" "$out"'
+  return ["timeout", String(IO_TIMEOUT_SECONDS * 4), "bash", "-c", script,
+          "bash", String(imagesDir), String(MAX_IMAGE_BYTES)]
+}
+
 function uid(prefix) {
   return String(prefix || "id") + "-" + Date.now().toString(36) + "-"
     + Math.floor(Math.random() * 1679616).toString(36)

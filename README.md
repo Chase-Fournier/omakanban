@@ -162,6 +162,20 @@ refuses to save over it, so a typo is recoverable.
 Nothing under `~/.local/share/omarchy/kanban/` is removed when the plugin is
 uninstalled; see [Remove](#remove).
 
+### What the board refuses to read
+
+The shell is long-lived, so the board treats its own data folder as untrusted
+input rather than as something it wrote. Before reading `board.json` it checks
+the descriptor it is about to read from — not just the path — and refuses if it
+is a symlink, is not a regular file, is not owned by you, or is over **8 MiB**.
+A refusal shows in the board header and holds every save, exactly like a parse
+error does, so the file on disk is never overwritten by a board that could not
+read it.
+
+Clipboard images are capped at **32 MiB** and land on a name `mktemp` picks, so
+an oversized paste cannot fill the disk and a write cannot be redirected onto a
+file planted at a name worth guessing.
+
 ## Scripting
 
 ```bash
